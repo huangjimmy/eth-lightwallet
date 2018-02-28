@@ -4,23 +4,59 @@
     <script type="text/javascript" src="../node_modules/web3/dist/web3.js"></script>
     <script type="text/javascript" src="../node_modules/hooked-web3-provider/build/hooked-web3-provider.js"></script>
     <script type="text/javascript" src="../node_modules/async/lib/async.js"></script>
+    <script type="text/javascript" src="../node_modules/bignumber.js/bignumber.min.js"></script>
 
     <script>
 
       var web3 = new Web3();
+
+      var erc20abi=[{"constant":true,"inputs":[],"name":"name","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"tokens","type":"uint256"}],"name":"approve","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"totalSupply","outputs":[{"name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"tokens","type":"uint256"}],"name":"transferFrom","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"name":"tokenOwner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"symbol","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"to","type":"address"},{"name":"tokens","type":"uint256"}],"name":"transfer","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[{"name":"tokenOwner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"remaining","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"anonymous":false,"inputs":[{"indexed":true,"name":"from","type":"address"},{"indexed":true,"name":"to","type":"address"},{"indexed":false,"name":"tokens","type":"uint256"}],"name":"Transfer","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"name":"tokenOwner","type":"address"},{"indexed":true,"name":"spender","type":"address"},{"indexed":false,"name":"tokens","type":"uint256"}],"name":"Approval","type":"event"}]
       var global_keystore;
+
+      var ERC20Contract;
+
+      var erc20addrs = ["0xFFAB690958a463EB859B6348279A2F5FDdB8Eba1","0x60B6a6420e6295eaa7dEa24eb780eC567205ee05"]
+      var erc20tokens = [];
+
+      var padding = function(str, decimals){
+        str = str+""
+        var pad = ""
+        for(var i=0;i<decimals;i++){
+          pad += "0";
+        }
+        var ans = pad.substring(0, pad.length - str.length) + str
+        return ans;
+      }
+
+      var toRealAmount = function (amount, decimals){
+        var a = padding(amount, decimals);
+        return a.slice(0, a.length-decimals)+"."+a.slice(a.length-decimals);
+      }
 
       function setWeb3Provider(keystore) {
         var web3Provider = new HookedWeb3Provider({
-          host: "https://rinkeby.infura.io/",
+          host: "http://testnet1:8080/",
           transaction_signer: keystore
         });
 
         web3.setProvider(web3Provider);
+
+        ERC20Contract = web3.eth.contract(erc20abi);//support for any ERC20-compatible token
+
+        erc20tokens = erc20addrs.map(function(addr){
+          var contract = ERC20Contract.at(addr)
+          return {"contract":contract, "decimals":contract.decimals.call(), "symbol":contract.symbol.call()};
+        })
+
+        document.getElementById('tokenIndex').innerHTML = '';
+        for (var i=0; i<erc20tokens.length; ++i) {
+          document.getElementById('tokenIndex').innerHTML += '<option value="' + i + '">' + erc20tokens[i].symbol + '</option>'
+        }
+
       }
 
       function newAddresses(password) {
-        
+
         if (password == '') {
           password = prompt('Enter password to retrieve addresses', 'Password');
         }
@@ -34,9 +70,11 @@
         var addresses = global_keystore.getAddresses();
 
         document.getElementById('sendFrom').innerHTML = ''
+        document.getElementById('sendTokenFrom').innerHTML = ''
         document.getElementById('functionCaller').innerHTML = ''
         for (var i=0; i<addresses.length; ++i) {
           document.getElementById('sendFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+          document.getElementById('sendTokenFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
           document.getElementById('functionCaller').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
         }
 
@@ -45,7 +83,7 @@
       }
 
       function getBalances() {
-        
+
         var addresses = global_keystore.getAddresses();
         document.getElementById('addr').innerHTML = 'Retrieving addresses...'
 
@@ -55,6 +93,20 @@
             for (var i=0; i<addresses.length; ++i) {
               document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + (balances[i] / 1.0e18) + ' ETH, Nonce: ' + nonces[i] + ')' + '</div>'
             }
+
+            async.map(erc20tokens, function(token){
+              async.map(addresses, token.contract.balanceOf, function(err, balances){
+                for (var i=0; i<addresses.length; ++i) {
+                  document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + toRealAmount(balances[i], token.decimals) + ' ' + token.symbol + ')' + '</div>'
+                }
+              })
+            })
+            // async.map(addresses, V9CPS.balanceOf, function(err, balances){
+            //   for (var i=0; i<addresses.length; ++i) {
+            //     document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + toRealAmount(balances[i], V9CPSMeta.decimals) + ' ' + V9CPSMeta.symbol + ')' + '</div>'
+            //   }
+            // })
+
           })
         })
 
@@ -66,17 +118,17 @@
       lightwallet.keystore.createVault({
         password: password,
         seedPhrase: document.getElementById('seed').value,
-        //random salt 
-        hdPathString: "m/0'/0'/0'"
+        //random salt
+        hdPathString: "m/44'/60'/0'/0"
       }, function (err, ks) {
 
         global_keystore = ks
 
         document.getElementById('seed').value = ''
-        
+
         newAddresses(password);
         setWeb3Provider(global_keystore);
-        
+
         getBalances();
         })
       }
@@ -86,7 +138,7 @@
         document.getElementById('userEntropy').value = '';
         var randomSeed = lightwallet.keystore.generateRandomSeed(extraEntropy);
 
-        var infoString = 'Your new wallet seed is: "' + randomSeed + 
+        var infoString = 'Your new wallet seed is: "' + randomSeed +
           '". Please write it down on paper or in a password manager, you will need it to access your wallet. Do not let anyone see this seed or they can take your Ether. ' +
           'Please enter a password to encrypt your seed while in the browser.'
         var password = prompt(infoString, 'Password');
@@ -95,12 +147,12 @@
       lightwallet.keystore.createVault({
         password: password,
         seedPhrase: randomSeed,
-        //random salt 
+        //random salt
         hdPathString: "m/0'/0'/0'"
       }, function (err, ks) {
 
         global_keystore = ks
-                
+
         newAddresses(password);
         setWeb3Provider(global_keystore);
         getBalances();
@@ -127,6 +179,34 @@
           console.log('error: ' + err)
           console.log('txhash: ' + txhash)
         })
+      }
+
+      //ERC20-compatible token transfer
+      function sendToken() {
+        var fromAddr = document.getElementById('sendTokenFrom').value
+        var toAddr = document.getElementById('sendTokenTo').value
+        var valueEth = document.getElementById('sendTokenAmount').value
+
+        var tokenIndex = document.getElementById('tokenIndex').value;
+        var contract = erc20tokens[tokenIndex].contract;
+        var decimals = erc20tokens[tokenIndex].decimals;
+
+        var value = new BigNumber(valueEth+"e+"+decimals);
+        var gasPrice = 21000000000
+
+        web3.eth.defaultAccount = fromAddr
+
+        var gas = contract.transfer.estimateGas(toAddr, value.toString())
+        console.log("estimateGas = "+gas)
+
+        var args = [toAddr, value.toString()];
+        args.push({from: fromAddr, value: "0", gasPrice: gasPrice, gas: gas})
+        args.push(function (error, result){
+          console.log(error)
+          console.log(JSON.stringify(result))
+        })
+
+        contract.transfer.apply(this, args);
       }
 
       function functionCall() {
@@ -164,6 +244,15 @@
     <div>To: <input type="text" size="40" id="sendTo"></input></div>
     <div>Ether: <input type="text" id="sendValueAmount"></div>
     <div><button onclick="sendEth()">Send Ether</button></div>
+
+    <h2>Send Token</h2>
+    <div>From: <select id="sendTokenFrom"></select></div>
+    <div>To: <input type="text" size="40" id="sendTokenTo"></input></div>
+    <div>Token: <input type="text" id="sendTokenAmount">
+      <select id="tokenIndex"></select>
+    </div>
+    <div><button onclick="sendToken()">Send Ether</button></div>
+
     <h2>Show Seed</h2>
     <button onclick="showSeed()">Show Seed</button>
     <h2>Function Call</h2>
