@@ -1,0 +1,387 @@
+<html>
+  <body>
+    <script src="../dist/lightwallet.min.js"></script>
+    <script type="text/javascript" src="../node_modules/web3/dist/web3.js"></script>
+    <script type="text/javascript" src="../node_modules/hooked-web3-provider/build/hooked-web3-provider.js"></script>
+    <script type="text/javascript" src="../node_modules/async/lib/async.js"></script>
+    <script type="text/javascript" src="../node_modules/bignumber.js/bignumber.min.js"></script>
+
+    <script>
+
+        var erc20abi=[{"constant":true,"inputs":[],"name":"name","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"spender","type":"address"},{"name":"tokens","type":"uint256"}],"name":"approve","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"totalSupply","outputs":[{"name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"tokens","type":"uint256"}],"name":"transferFrom","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[],"name":"decimals","outputs":[{"name":"","type":"uint8"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[{"name":"tokenOwner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":true,"inputs":[],"name":"symbol","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"name":"to","type":"address"},{"name":"tokens","type":"uint256"}],"name":"transfer","outputs":[{"name":"success","type":"bool"}],"payable":false,"stateMutability":"nonpayable","type":"function"},{"constant":true,"inputs":[{"name":"tokenOwner","type":"address"},{"name":"spender","type":"address"}],"name":"allowance","outputs":[{"name":"remaining","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"anonymous":false,"inputs":[{"indexed":true,"name":"from","type":"address"},{"indexed":true,"name":"to","type":"address"},{"indexed":false,"name":"tokens","type":"uint256"}],"name":"Transfer","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"name":"tokenOwner","type":"address"},{"indexed":true,"name":"spender","type":"address"},{"indexed":false,"name":"tokens","type":"uint256"}],"name":"Approval","type":"event"}]
+        var erc20addrs = ["0xFFAB690958a463EB859B6348279A2F5FDdB8Eba1","0x60B6a6420e6295eaa7dEa24eb780eC567205ee05"]
+
+        class Wallet {
+
+            constructor(jsonRpcUrl, keystore, erc20addresses){
+
+                this.jsonRpcUrl = jsonRpcUrl;
+                var web3 = new Web3();
+                this.web3 = web3;
+
+                var web3Provider = new HookedWeb3Provider({
+                    host: this.jsonRpcUrl,
+                    transaction_signer: keystore
+                });
+
+                web3.setProvider(web3Provider);
+
+                var ERC20Contract = web3.eth.contract(erc20abi);
+
+                var contractMap = {}
+
+                this.erc20tokens = erc20addresses.map(function(addr){
+                    var contract = ERC20Contract.at(addr)
+                    var contractMeta = {"contractAddress":addr,"contract":contract, "decimals":contract.decimals.call(), "symbol":contract.symbol.call(), "name":contract.name.call()};
+                    contractMap[addr] = contractMeta
+                    return contractMeta;
+                });
+
+                this.contractMap = contractMap;
+                this.addresses = keystore.getAddresses();
+                this.keystore = keystore;
+            }
+
+            setDefaultAddress(address){
+                this.web3.eth.defaultAccount = address;
+            }
+
+            hasAddress (address, callback) {
+                return this.keystore.hasAddress(address, callback);
+            }
+
+            signTransaction (tx_params, callback) {
+                return this.keystore.signTransaction(tx_params, callback);
+            }
+
+            getBalance(callback){
+
+                async.map(this.addresses, web3.eth.getBalance, function(err, balances) {
+                    async.map(addresses, web3.eth.getTransactionCount, function (err, nonces) {
+                        for (var i = 0; i < addresses.length; ++i) {
+                            callback(null, address[i], balances[i], 'ETH', 8, nonces[i])
+                        }
+                    })
+                })
+
+                async.map(this.erc20tokens, function (token) {
+                    async.map(this.addresses, token.contract.balanceOf, function (err, balances) {
+                        for (var i = 0; i < addresses.length; ++i) {
+                            callback(token.contractAddress, addresses[i], balances[i], token.symbol, token.decimals, 0)
+                        }
+                    })
+                })
+            }
+
+            serialize(){
+                return JSON.stringify({"erc20address":this.erc20tokens.map(function (x) {return x.contractAddress}), "keystore":this.keystore.serialize(), "jsonRpcUrl":this.jsonRpcUrl});
+            }
+
+            static deserialize(jsonRaw){
+                var json = JSON.parse(jsonRaw);
+                var jsonRpcUrl = json.jsonRpcUrl;
+                var keystore = lightwallet.keystore.deserialize(json.keystore);
+                var erc20addresses = json.erc20address
+
+                return new Wallet(jsonRpcUrl, keystore, erc20addresses);
+            }
+
+            contractAtAddress(addr){
+                return this.contractMap[addr];
+            }
+
+            contractList(){
+                return this.erc20tokens
+            }
+
+            changeRpcUrl (jsonRpcUrl){
+                this.jsonRpcUrl =  jsonRpcUrl;
+                var web3Provider = new HookedWeb3Provider({
+                    host: this.jsonRpcUrl,
+                    transaction_signer: this.keystore
+                });
+
+                this.web3.setProvider(web3Provider);
+            }
+        }
+
+        var wallet = null;
+        var wallets = [];
+
+      var padding = function(str, decimals){
+        str = str+""
+        var pad = ""
+        for(var i=0;i<decimals;i++){
+          pad += "0";
+        }
+        var ans = pad.substring(0, pad.length - str.length) + str
+        return ans;
+      }
+
+      var toRealAmount = function (amount, decimals){
+        var a = padding(amount, decimals);
+        return a.slice(0, a.length-decimals)+"."+a.slice(a.length-decimals);
+      }
+
+      function setWeb3Provider(keystore) {
+
+          wallet = new Wallet("http://testnet1:8080/", keystore, erc20addrs);
+
+        var web3Provider = new HookedWeb3Provider({
+          host: "http://testnet1:8080/",
+          transaction_signer: keystore
+        });
+
+        web3.setProvider(web3Provider);
+
+        erc20tokens = wallet.contractList()
+
+        document.getElementById('tokenIndex').innerHTML = '';
+        for (var i=0; i<erc20tokens.length; ++i) {
+          document.getElementById('tokenIndex').innerHTML += '<option value="' + i + '">' + erc20tokens[i].symbol+"("+erc20tokens[i].name+")" + '</option>'
+        }
+
+      }
+
+      function newAddresses(keystore, password) {
+
+        if (password == '') {
+          password = prompt('Enter password to retrieve addresses', 'Password');
+        }
+
+        var numAddr = 9;//parseInt(document.getElementById('numAddr').value)
+
+        keystore.keyFromPassword(password, function(err, pwDerivedKey) {
+
+        keystore.generateNewAddress(pwDerivedKey, numAddr);
+
+        var addresses = keystore.getAddresses();
+
+        document.getElementById('sendFrom').innerHTML = ''
+        document.getElementById('sendTokenFrom').innerHTML = ''
+        document.getElementById('functionCaller').innerHTML = ''
+        for (var i=0; i<addresses.length; ++i) {
+          document.getElementById('sendFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+          document.getElementById('sendTokenFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+          document.getElementById('functionCaller').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+        }
+
+        getBalances();
+      })
+      }
+
+      function getBalances() {
+
+          var erc20tokens = wallet.contractList()
+        var addresses = wallet.keystore.getAddresses();
+        document.getElementById('addr').innerHTML = 'Retrieving addresses...'
+
+        async.map(addresses, wallet.web3.eth.getBalance, function(err, balances) {
+          async.map(addresses, wallet.web3.eth.getTransactionCount, function(err, nonces) {
+            document.getElementById('addr').innerHTML = ''
+            for (var i=0; i<addresses.length; ++i) {
+              document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + (balances[i] / 1.0e18) + ' ETH, Nonce: ' + nonces[i] + ')' + '</div>'
+            }
+/*
+            async.map(erc20tokens, function(token){
+              async.map(addresses, token.contract.balanceOf, function(err, balances){
+                for (var i=0; i<addresses.length; ++i) {
+                  document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + toRealAmount(balances[i], token.decimals) + ' ' + token.symbol + ')' + '</div>'
+                }
+              })
+            })*/
+            // async.map(addresses, V9CPS.balanceOf, function(err, balances){
+            //   for (var i=0; i<addresses.length; ++i) {
+            //     document.getElementById('addr').innerHTML += '<div>' + addresses[i] + ' (Bal: ' + toRealAmount(balances[i], V9CPSMeta.decimals) + ' ' + V9CPSMeta.symbol + ')' + '</div>'
+            //   }
+            // })
+
+          })
+        })
+
+      }
+
+      function setSeed() {
+        var password = prompt('Enter Password to encrypt your seed', 'Password');
+
+      lightwallet.keystore.createVault({
+        password: password,
+        seedPhrase: document.getElementById('seed').value,
+        //random salt
+        hdPathString: "m/44'/60'/0'/0"
+      }, function (err, ks) {
+
+        document.getElementById('seed').value = ''
+
+        newAddresses(ks, password);
+        setWeb3Provider(ks);
+
+        getBalances();
+        })
+      }
+
+      function newWallet() {
+        var extraEntropy = document.getElementById('userEntropy').value;
+        document.getElementById('userEntropy').value = '';
+        var randomSeed = lightwallet.keystore.generateRandomSeed(extraEntropy);
+
+        var infoString = 'Your new wallet seed is: "' + randomSeed +
+          '". Please write it down on paper or in a password manager, you will need it to access your wallet. Do not let anyone see this seed or they can take your Ether. ' +
+          'Please enter a password to encrypt your seed while in the browser.'
+        var password = prompt(infoString, 'Password');
+
+
+      lightwallet.keystore.createVault({
+        password: password,
+        seedPhrase: randomSeed,
+        //random salt
+        hdPathString: "m/0'/0'/0'"
+      }, function (err, ks) {
+
+        var keystore = ks
+
+        newAddresses(keystore ,password);
+        setWeb3Provider(keystore);
+        getBalances();
+        })
+      }
+
+      function loadWallet(){
+          var json = localStorage.getItem("wallet:light-wallet")
+          wallet = Wallet.deserialize(json);
+
+          document.getElementById('sendFrom').innerHTML = ''
+          document.getElementById('sendTokenFrom').innerHTML = ''
+          document.getElementById('functionCaller').innerHTML = ''
+
+          var addresses = wallet.addresses
+
+          for (var i=0; i<addresses.length; ++i) {
+              document.getElementById('sendFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+              document.getElementById('sendTokenFrom').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+              document.getElementById('functionCaller').innerHTML += '<option value="' + addresses[i] + '">' + addresses[i] + '</option>'
+          }
+
+          var erc20tokens = wallet.contractList()
+
+          document.getElementById('tokenIndex').innerHTML = '';
+          for (var i=0; i<erc20tokens.length; ++i) {
+              document.getElementById('tokenIndex').innerHTML += '<option value="' + i + '">' + erc20tokens[i].symbol+"("+erc20tokens[i].name+")" + '</option>'
+          }
+
+          getBalances();
+      }
+
+        function saveWallet(){
+            localStorage.setItem("wallet:light-wallet", wallet.serialize())
+        }
+
+      function showSeed() {
+        var password = prompt('Enter password to show your seed. Do not let anyone else see your seed.', 'Password');
+
+        wallet.keystore.keyFromPassword(password, function(err, pwDerivedKey) {
+        var seed = wallet.keystore.getSeed(pwDerivedKey);
+        alert('Your seed is: "' + seed + '". Please write it down.');
+        });
+      }
+
+      function sendEth() {
+        var fromAddr = document.getElementById('sendFrom').value
+        var toAddr = document.getElementById('sendTo').value
+        var valueEth = document.getElementById('sendValueAmount').value
+        var value = parseFloat(valueEth)*1.0e18
+        var gasPrice = 18000000000
+        var gas = 50000
+        wallet.web3.eth.sendTransaction({from: fromAddr, to: toAddr, value: value, gasPrice: gasPrice, gas: gas}, function (err, txhash) {
+          console.log('error: ' + err)
+          console.log('txhash: ' + txhash)
+        })
+      }
+
+      //ERC20-compatible token transfer
+      function sendToken() {
+        var fromAddr = document.getElementById('sendTokenFrom').value
+        var toAddr = document.getElementById('sendTokenTo').value
+        var valueEth = document.getElementById('sendTokenAmount').value
+
+          wallet.setDefaultAddress(fromAddr);
+
+        var tokenIndex = document.getElementById('tokenIndex').value;
+        erc20tokens = wallet.contractList()
+        var contract = erc20tokens[tokenIndex].contract;
+        var decimals = erc20tokens[tokenIndex].decimals;
+
+        var value = new BigNumber(valueEth+"e+"+decimals);
+        var gasPrice = 21000000000
+
+        var gas = contract.transfer.estimateGas(toAddr, value.toString())
+        console.log("estimateGas = "+gas)
+
+        var args = [toAddr, value.toString()];
+        args.push({from: fromAddr, value: "0", gasPrice: gasPrice, gas: gas})
+        args.push(function (error, result){
+          console.log(error)
+          console.log(JSON.stringify(result))
+        })
+
+        contract.transfer.apply(this, args);
+      }
+
+      function functionCall() {
+        var fromAddr = document.getElementById('functionCaller').value
+        var contractAddr = document.getElementById('contractAddr').value
+        var abi = JSON.parse(document.getElementById('contractAbi').value)
+        var contract = web3.eth.contract(abi).at(contractAddr)
+        var functionName = document.getElementById('functionName').value
+        var args = JSON.parse('[' + document.getElementById('functionArgs').value + ']')
+        var valueEth = document.getElementById('sendValueAmount').value
+        var value = parseFloat(valueEth)*1.0e18
+        var gasPrice = 50000000000
+        var gas = 4541592
+        args.push({from: fromAddr, value: value, gasPrice: gasPrice, gas: gas})
+        var callback = function(err, txhash) {
+          console.log('error: ' + err)
+          console.log('txhash: ' + txhash)
+        }
+        args.push(callback)
+        contract[functionName].apply(this, args)
+      }
+
+    </script>
+    <h1>LightWallet</h1>
+    <h2>New Wallet</h2>
+    <div><input type="text" id="userEntropy" placeholder="Type random text to generate entropy" size="80"></input><button onclick="newWallet()">Create New Wallet</button></div>
+    <h2>Restore Wallet</h2>
+    <div><input type="text" id="seed" value="" size="80"></input><button onclick="setSeed()">Restore wallet from Mnemonics</button></div>
+    <h2>Load Existing Wallet</h2>
+    <div><button onclick="loadWallet()">Load Existing Wallet</button><button onclick="saveWallet()">Save Current Wallet</button></div>
+    <h2>Balance</h2>
+    <div id="addr"></div>
+    <div><button onClick='getBalances()'>Refresh</button></div>
+    <h2>Send Ether</h2>
+    <div>From: <select id="sendFrom"></select></div>
+    <div>To: <input type="text" size="40" id="sendTo"></input></div>
+    <div>Ether: <input type="text" id="sendValueAmount"></div>
+    <div><button onclick="sendEth()">Send Ether</button></div>
+
+    <h2>Send Token</h2>
+    <div>From: <select id="sendTokenFrom"></select></div>
+    <div>To: <input type="text" size="40" id="sendTokenTo"></input></div>
+    <div>Token: <input type="text" id="sendTokenAmount">
+      <select id="tokenIndex"></select>
+    </div>
+    <div><button onclick="sendToken()">Send Ether</button></div>
+
+    <h2>Export Mnemonics</h2>
+    <button onclick="showSeed()">Show Seed</button>
+    <h2>Function Call</h2>
+    <div>Caller: <select id="functionCaller"></select></div>
+    <div>Contract Address: <input type="text" size="40" id="contractAddr"></input></div>
+    <div>Contract ABI: <input type="text" size="40" id="contractAbi"></input></div>
+    <div>Function Name: <input type="text" size="20" id="functionName"></input></div>
+    <div>Function Arguments: <input type="text" size="40" id="functionArgs"></input></div>
+    <div>Value (Ether): <input type="text" id="sendValueAmount"></div>
+    <div><button onclick="functionCall()">Call Function</button></div>
+
+  </body>
+</html>
